@@ -59,6 +59,9 @@ static class DocAssets
         [new("Codex", [Week(50, 60)]), new("Claude", [Week(92, 69)])],
     ];
 
+    // RAM for the bars icon, one per state.
+    static readonly UsageWindow[] IconRam = [new("ram", 45, TimeSpan.Zero, null), new("ram", 71, TimeSpan.Zero, null), new("ram", 93, TimeSpan.Zero, null)];
+
     /// <summary>One strip per icon style, showing the three states on a dark taskbar.</summary>
     static Bitmap IconStrip(IconStyle style, int size)
     {
@@ -71,7 +74,7 @@ static class DocAssets
             g.FillPath(brush, bg);
         for (var i = 0; i < IconStates.Length; i++)
         {
-            using var icon = IconRenderer.Draw(style, IconStates[i], size, light: false);
+            using var icon = IconRenderer.Draw(style, IconStates[i], size, light: false, IconRam[i]);
             g.DrawImage(icon, pad + i * (size + gap), pad);
         }
         return strip;
@@ -99,9 +102,9 @@ static class DocAssets
                     g.FillRectangle(bg, 0, row * Cell, sheet.Width, Cell);
                 var col = 0;
                 foreach (var style in styles)
-                    foreach (var state in IconStates)
+                    for (var i = 0; i < IconStates.Length; i++)
                     {
-                        using var icon = IconRenderer.Draw(style, state, size, light);
+                        using var icon = IconRenderer.Draw(style, IconStates[i], size, light, IconRam[i]);
                         g.DrawImage(icon, col * Cell + 8, row * Cell + 8, size * Zoom, size * Zoom);
                         col++;
                     }

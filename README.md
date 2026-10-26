@@ -68,7 +68,7 @@ Pick a style via right-click → **Icon**. All three follow the same colors and 
 | Style | | Shows |
 |---|---|---|
 | **Ring** (default) | <img src="docs/icon-ring.png" alt="Ring icon" height="48"> | The window most at risk: % inside, progress ring, pace notch |
-| **Bars** | <img src="docs/icon-bars.png" alt="Bars icon" height="48"> | Codex (left) and Claude (right) side by side, each with a pace tick |
+| **Bars** | <img src="docs/icon-bars.png" alt="Bars icon" height="48"> | Codex, Claude and RAM side by side; Codex and Claude have a pace tick |
 | **Classic** | <img src="docs/icon-classic.png" alt="Classic icon" height="48"> | The window most at risk as a colored tile |
 
 Hover the icon for a one-line summary of everything.
