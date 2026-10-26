@@ -77,8 +77,8 @@ sealed class TrayApp : ApplicationContext
         _popup.SystemClicked += () => _procs.ShowNear(_popup.Bounds);
         _timer.Tick += (_, _) => _ = RefreshAsync();
         _timer.Start();
-        // RAM moves faster than the limits; only the bars icon shows it.
-        _ramTimer.Tick += (_, _) => { if (Settings.IconStyle == IconStyle.Bars) UpdateTray(); };
+        // RAM moves faster than the limits: keep the bars icon and the tooltip current.
+        _ramTimer.Tick += (_, _) => UpdateTray();
         _ramTimer.Start();
         _ = RefreshAsync();
     }
@@ -139,9 +139,11 @@ sealed class TrayApp : ApplicationContext
         _tray.Icon = IconRenderer.Render(Settings.IconStyle, _data, ram);
         old?.Dispose();
 
-        var tip = string.Join("\n", _data.Select(p => p.Error is not null
+        var lines = _data.Select(p => p.Error is not null
             ? $"{p.Name}: {p.Error}"
-            : $"{p.Name}  " + string.Join("  ", p.Windows.Select(w => $"{w.Label} {w.UsedPct:0}% ({Fmt.Delta(w.Delta)})"))));
+            : $"{p.Name}  " + string.Join("  ", p.Windows.Select(w => $"{w.Label} {w.UsedPct:0}% ({Fmt.Delta(w.Delta)})"))).ToList();
+        if (ram is not null) lines.Add($"RAM  {ram.UsedPct:0}% ({ram.Detail})");
+        var tip = string.Join("\n", lines);
         if (tip.Length == 0) tip = "UsageTray";
         _tray.Text = tip.Length > 127 ? tip[..127] : tip;
     }
