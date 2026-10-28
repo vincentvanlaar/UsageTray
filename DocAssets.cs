@@ -12,6 +12,8 @@ static class DocAssets
 
         using (var popup = new PopupForm())
             popup.RenderTo(Demo(), Path.Combine(docsDir, "flyout.png"), DemoSystem());
+        using (var sessions = new SessionForm())
+            sessions.RenderTo("Claude", DemoSessions(), Path.Combine(docsDir, "sessions.png"));
         using (var logo = IconRenderer.Logo(256))
             logo.Save(Path.Combine(docsDir, "logo.png"), ImageFormat.Png);
         File.Delete(Path.Combine(docsDir, "tray-icons.png"));
@@ -43,6 +45,21 @@ static class DocAssets
         new("ram", 71, TimeSpan.Zero, null, "23/32G"),
         new("commit", 58, TimeSpan.Zero, null, "37/64G"),
     ], Note: L.T("click for processes", "klik voor processen"));
+
+    // One session per status; the long-idle one shows the stop button.
+    static AgentSession[] DemoSessions()
+    {
+        AgentSession Session(string title, string project, SessionState state, string status, double minutes, double gb) =>
+            new(title, project, state, status, DateTimeOffset.Now.AddMinutes(-minutes), (long)(gb * (1L << 30)), null, null,
+                new ProcGroup(title, "", 0, [new ProcRow(0, null, "claude", "", 0, false)], "claude://"), true);
+        return
+        [
+            Session(L.T("Fix login redirect", "Login-redirect fixen"), "webapp", SessionState.NeedsYou, L.T("question", "vraag"), 1, 0.9),
+            Session(L.T("Add CSV export", "CSV-export toevoegen"), "api", SessionState.Working, L.T("working", "bezig"), 3, 1.6),
+            Session(L.T("Review open PRs", "Open PR's reviewen"), "webapp", SessionState.Idle, L.T("idle 12m", "stil 12m"), 12, 0.7),
+            Session(L.T("Update dependencies", "Dependencies bijwerken"), "docs", SessionState.Idle, L.T("idle 2h 05m", "stil 2h 05m"), 125, 1.1),
+        ];
+    }
 
     static readonly Color DarkTaskbar = Color.FromArgb(0x20, 0x20, 0x20);
     static readonly Color LightTaskbar = Color.FromArgb(0xF3, 0xF3, 0xF3);

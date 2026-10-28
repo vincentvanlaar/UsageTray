@@ -7,15 +7,18 @@ using Microsoft.Win32.SafeHandles;
 namespace UsageTray;
 
 /// <param name="CanEnd">This app may terminate it (not a guarantee that nothing else stops it).</param>
-sealed record Proc(int Pid, int ParentPid, string Name, long Commit, DateTime? Started, string? CommandLine, bool CanEnd);
+/// <param name="Cpu">Processor time used since it started.</param>
+sealed record Proc(int Pid, int ParentPid, string Name, long Commit, DateTime? Started, string? CommandLine, bool CanEnd, TimeSpan Cpu);
 
 /// <summary>One process as shown in the flyout; <see cref="Started"/> guards against PID reuse when ending it.</summary>
-sealed record ProcRow(int Pid, DateTime? Started, string Name, string Detail, long Commit, bool Protected);
+sealed record ProcRow(int Pid, DateTime? Started, string Name, string Detail, long Commit, bool Protected, TimeSpan Cpu = default);
 
 /// <summary>An app: a root process plus its descendants. <see cref="Members"/> has the root first.</summary>
 /// <param name="Link">Opens the app's own view of it (Claude sessions: claude://… in the desktop app).</param>
 /// <param name="Sessions">Claude Code sessions this app started. They have their own rows, but can end with it.</param>
-sealed record ProcGroup(string Title, string Detail, long Commit, IReadOnlyList<ProcRow> Members, string? Link = null, int Sessions = 0)
+/// <param name="Agent">"Claude" or "Codex" when the app is an agent session.</param>
+sealed record ProcGroup(string Title, string Detail, long Commit, IReadOnlyList<ProcRow> Members, string? Link = null, int Sessions = 0,
+    string? Agent = null, ClaudeSession? Session = null, string? CommandLine = null)
 {
     public int RootPid => Members[0].Pid;
     public bool Protected => Members[0].Protected;
@@ -38,7 +41,8 @@ static class ProcessSource
     static readonly HashSet<string> Browsers = new(StringComparer.OrdinalIgnoreCase)
         { "chrome", "msedge", "brave", "vivaldi", "opera" };
 
-    public static IReadOnlyList<ProcGroup> Read(int top = 40)
+    /// <param name="agent">Only the sessions of this agent ("Claude" or "Codex"), all of them.</param>
+    public static IReadOnlyList<ProcGroup> Read(int top = 40, string? agent = null)
     {
         var procs = Snapshot();
         var sessions = ClaudeSessions.Read(procs);
@@ -46,9 +50,9 @@ static class ProcessSource
         // A parent PID only counts when that process is older than the child (PIDs get reused).
         Proc? Parent(Proc p) => procs.TryGetValue(p.ParentPid, out var a) && a.Pid != p.Pid && a.Started <= p.Started ? a : null;
 
-        bool IsSession(Proc p) => sessions.ContainsKey(p.Pid) || IsCli(p);
+        bool IsSession(Proc p) => sessions.ContainsKey(p.Pid) || IsCli(p) || IsCodex(p);
 
-        // Claude Code sessions are apps of their own, apart from whatever launched them. A session
+        // Agent sessions are apps of their own, apart from whatever launched them. A session
         // started from inside another one (a `claude -p` run by a tool) stays with that one.
         bool OwnGroup(Proc p)
         {
@@ -92,23 +96,30 @@ static class ProcessSource
                 launched[group] = launched.GetValueOrDefault(group) + 1;
 
         return trees
+            .Where(t => agent is null || IsSession(t[0]) && AgentOf(t[0]) == agent)
             .OrderByDescending(t => t.Sum(p => p.Commit))
-            .Take(top)
-            .Select(t => Build(t, IsSession(t[0]), sessions.GetValueOrDefault(t[0].Pid), launched.GetValueOrDefault(t[0].Pid)))
+            .Take(agent is null ? top : int.MaxValue)
+            .Select(t => Build(t, IsSession(t[0]), sessions.GetValueOrDefault(t[0].Pid), launched.GetValueOrDefault(t[0].Pid), Parent(t[0])))
             .ToList();
     }
 
-    static ProcGroup Build(List<Proc> all, bool isSession, ClaudeSession? s, int launched)
+    static ProcGroup Build(List<Proc> all, bool isSession, ClaudeSession? s, int launched, Proc? parent)
     {
         var root = all[0];
         var browser = Browsers.Contains(root.Name);
         var members = all
-            .Select(p => new ProcRow(p.Pid, p.Started, p.Name, p == root && browser ? "browser" : Describe(p), p.Commit, IsProtected(p)))
+            .Select(p => new ProcRow(p.Pid, p.Started, p.Name, p == root && browser ? "browser" : Describe(p), p.Commit, IsProtected(p), p.Cpu))
             .ToList();
 
         var title = root.Name;
         string? detail, link = null;
-        if (isSession)
+        if (isSession && IsCodex(root))
+        {
+            var server = root.CommandLine!.Contains(" app-server");
+            title = server ? L.T("Codex app-server", "Codex app-server") : L.T("Codex session", "Codex-sessie");
+            detail = Fmt.Join("codex", server ? parent?.Name : null);
+        }
+        else if (isSession)
         {
             title = s?.Title ?? L.T("Claude Code session", "Claude Code-sessie");
             var status = s is { Status: "idle", StatusSince: { } at } ? L.T("idle ", "stil ") + Fmt.Span(DateTimeOffset.Now - at) : s?.Status;
@@ -119,7 +130,8 @@ static class ProcessSource
         else if (browser) detail = $"{members.Count(m => m.Detail == "renderer")} renderers";
         else detail = WindowTitle(root.Pid);
 
-        return new(title, Fmt.Join(detail, all.Count > 1 ? $"{all.Count} proc" : null) ?? "", all.Sum(p => p.Commit), members, link, launched);
+        return new(title, Fmt.Join(detail, all.Count > 1 ? $"{all.Count} proc" : null) ?? "", all.Sum(p => p.Commit), members, link, launched,
+            isSession ? AgentOf(root) : null, s, root.CommandLine);
     }
 
     /// <summary>Ends the given processes; skips protected ones and PIDs that were reused since the snapshot.</summary>
@@ -167,6 +179,12 @@ static class ProcessSource
             || exe.Contains(@"\AnthropicClaude\", StringComparison.OrdinalIgnoreCase));
 
     static bool IsCli(Proc p) => IsClaude(p) && !IsDesktop(p);
+
+    // The Codex CLI (a terminal session, or the app-server behind an editor or the Codex app), not the Codex app's own window.
+    static bool IsCodex(Proc p) => p.CommandLine is { } cmd && p.Name.Equals("codex", StringComparison.OrdinalIgnoreCase)
+        && !cmd.Contains("--type=") && (cmd.Contains(" app-server") || !Exe(cmd).Contains(@"\WindowsApps", StringComparison.OrdinalIgnoreCase));
+
+    static string AgentOf(Proc p) => IsCodex(p) ? "Codex" : "Claude";
 
     static string Exe(string cmd) => cmd.StartsWith('"') ? cmd[1..Math.Max(1, cmd.IndexOf('"', 1))] : cmd.Split(' ')[0];
 
@@ -224,8 +242,12 @@ static class ProcessSource
                             ? Math.Max(p.PrivateMemorySize64, p.WorkingSet64)
                             : p.PrivateMemorySize64;
                         var (parent, commandLine) = started is null ? (0, null) : Query(p.Id, buffer);
+                        var cpu = TimeSpan.Zero;
+                        if (started is not null)
+                            try { cpu = p.TotalProcessorTime; }
+                            catch (Exception) { /* no rights: no CPU number */ }
                         procs[p.Id] = new(p.Id, parent, p.ProcessName, commit, started, commandLine,
-                            started is not null && CanTerminate(p.Id));
+                            started is not null && CanTerminate(p.Id), cpu);
                     }
                     catch (InvalidOperationException)
                     {

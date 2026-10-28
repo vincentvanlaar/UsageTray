@@ -6,8 +6,11 @@ namespace UsageTray;
 
 /// <param name="LocalId">The desktop app's id for the session ("local_…") when the desktop app runs it.</param>
 /// <param name="Entrypoint">How it was started, e.g. "claude-desktop", "cli", "sdk-cli".</param>
-/// <param name="Status">"idle", "busy", …, since <paramref name="StatusSince"/>.</param>
-sealed record ClaudeSession(string? Title, string? LocalId, string? Entrypoint, string? Status, DateTimeOffset? StatusSince);
+/// <param name="Status">"idle", "busy" or "waiting", since <paramref name="StatusSince"/>.</param>
+/// <param name="WaitingFor">What a waiting session needs, e.g. "input needed" or "dialog open".</param>
+/// <param name="Cwd">The folder it works in.</param>
+sealed record ClaudeSession(string? Title, string? LocalId, string? Entrypoint, string? Status, DateTimeOffset? StatusSince,
+    string? WaitingFor = null, string? Cwd = null);
 
 /// <summary>
 /// Running Claude Code sessions, from the file Claude Code keeps per process in
@@ -39,7 +42,7 @@ static class ClaudeSessions
                     DateTimeOffset? since = doc["statusUpdatedAt"] is JsonValue v && v.TryGetValue<long>(out var ms)
                         ? DateTimeOffset.FromUnixTimeMilliseconds(ms)
                         : null;
-                    sessions[pid] = new(S("name"), localId, S("entrypoint"), S("status"), since);
+                    sessions[pid] = new(S("name"), localId, S("entrypoint"), S("status"), since, S("waitingFor"), S("cwd"));
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
                 {

@@ -11,6 +11,8 @@ static class Program
             case ["--snapshot", var path]:
                 ApplicationConfiguration.Initialize();
                 var data = new[] { CodexSource.ReadAsync().GetAwaiter().GetResult(), ClaudeSource.ReadAsync().GetAwaiter().GetResult() };
+                SystemSource.Read(); // CPU and GPU are rates: the reading below compares with this one
+                Thread.Sleep(1000);
                 using (var popup = new PopupForm())
                     popup.RenderTo(data.OfType<ProviderStatus>().ToList(), path, SystemSource.Read());
                 return;
@@ -30,6 +32,14 @@ static class Program
                     procs.ShowNear(new Rectangle(Cursor.Position, Size.Empty));
                     Application.Run();
                 }
+                return;
+
+            case ["--sessions", var agent, var path]:
+                ApplicationConfiguration.Initialize();
+                SessionSource.Read(agent, Settings.ShowGpu);
+                Thread.Sleep(1000); // CPU and GPU are rates: a second reading compares with the first
+                using (var sessions = new SessionForm())
+                    sessions.RenderTo(agent, SessionSource.Read(agent, Settings.ShowGpu), path);
                 return;
 
             case ["--preview-icons", var path]:
