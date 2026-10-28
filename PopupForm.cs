@@ -29,7 +29,7 @@ sealed class PopupForm : Flyout
     public event Action<string, Rectangle>? SessionsRequested;
     /// <summary>The gear was clicked; the point is where the menu should open, in client coordinates.</summary>
     public event Action<Point>? SettingsRequested;
-    /// <summary>It hid because focus left it (and not for the session panel).</summary>
+    /// <summary>It hid on Esc, or because focus left it for anything but the session panel.</summary>
     public event Action? Dismissed;
 
     public PopupForm()

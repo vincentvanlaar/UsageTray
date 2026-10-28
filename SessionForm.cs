@@ -22,8 +22,11 @@ sealed class SessionForm : Flyout
     int _top; // screen y of the header that opened it
     int _hover = -1; // row under the cursor
     bool _hoverStop; // and the cursor is on its stop button
+    int _scroll; // index of the first session shown; the mouse wheel moves it
+    int _wheel; // wheel delta not scrolled yet: touchpads send small steps
+    int _pageRows = int.MaxValue; // rows that fit on the screen
     Rectangle _footer;
-    bool _busy, _modal;
+    bool _busy, _reload, _modal;
     readonly List<(Rectangle Row, Rectangle Stop, AgentSession Session)> _rows = [];
     readonly System.Windows.Forms.Timer _timer = new() { Interval = (int)RefreshEvery.TotalMilliseconds };
     readonly ContextMenuStrip _menu = new();
@@ -42,7 +45,7 @@ sealed class SessionForm : Flyout
     public void ShowBeside(Flyout beside, string agent, int top)
     {
         if (_agent != agent) _sessions = null; // no other agent's list while this one loads
-        (_beside, _agent, _top, _hover) = (beside, agent, top, -1);
+        (_beside, _agent, _top, _hover, _scroll) = (beside, agent, top, -1, 0);
         Relayout();
         Show();
         Activate();
@@ -62,18 +65,25 @@ sealed class SessionForm : Flyout
 
     async Task LoadAsync()
     {
-        if (_busy) return;
+        // A request during a load (another agent, a stop) loads again when that one ends.
+        if (_busy) { _reload = true; return; }
         _busy = true;
         try
         {
-            var (agent, gpu) = (_agent, Settings.ShowGpu);
-            var sessions = await Task.Run(() => SessionSource.Read(agent, gpu));
-            if (agent != _agent) return;
-            (_sessions, _error, _updated) = (sessions, null, DateTimeOffset.Now);
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
+            do
+            {
+                _reload = false;
+                try
+                {
+                    var (agent, gpu) = (_agent, Settings.ShowGpu);
+                    var sessions = await Task.Run(() => SessionSource.Read(agent, gpu));
+                    if (agent == _agent) (_sessions, _error, _updated) = (sessions, null, DateTimeOffset.Now);
+                }
+                catch (Exception ex)
+                {
+                    _error = ex.Message;
+                }
+            } while (_reload);
         }
         finally
         {
@@ -100,6 +110,18 @@ sealed class SessionForm : Flyout
             HideOnDeactivate();
             Dismissed?.Invoke();
         });
+    }
+
+    protected override void OnMouseWheel(MouseEventArgs e)
+    {
+        base.OnMouseWheel(e);
+        _wheel += e.Delta;
+        var notches = _wheel / 120; // WHEEL_DELTA
+        _wheel -= notches * 120;
+        var scroll = Math.Clamp(_scroll - notches * 3, 0, Math.Max(0, (_sessions?.Count ?? 0) - _pageRows));
+        if (scroll == _scroll) return;
+        (_scroll, _hover) = (scroll, -1);
+        Invalidate();
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
@@ -205,12 +227,18 @@ sealed class SessionForm : Flyout
 
     protected override void Relayout()
     {
-        var rows = Math.Max(1, _sessions?.Count ?? 1);
+        // Beside the flyout, only as many rows as the screen holds; the rest scroll.
+        var beside = _beside is { Visible: true } b ? b : null;
+        var area = beside is null ? Rectangle.Empty : AvailableArea(Screen.FromControl(beside));
+        _pageRows = beside is null ? int.MaxValue : Math.Max(1, (area.Height - Px(20) - Px(Pad + HeadH + 4 + FootH + 4)) / Px(RowH));
+        var count = _sessions?.Count ?? 0;
+        _scroll = Math.Clamp(_scroll, 0, Math.Max(0, count - _pageRows));
+
+        var rows = Math.Clamp(count, 1, _pageRows);
         var meters = (Settings.ShowCpu ? 1 : 0) + (Settings.ShowGpu ? 1 : 0);
         Size = new Size(Px(W + meters * MeterW), Px(Pad + HeadH + rows * RowH + 4 + FootH + 4));
-        if (_beside is not { Visible: true } beside) return;
+        if (beside is null) return;
 
-        var area = AvailableArea(Screen.FromControl(beside));
         var gap = Px(8);
         var x = beside.Left - gap - Width >= area.Left ? beside.Left - gap - Width
             : beside.Right + gap + Width <= area.Right ? beside.Right + gap
@@ -251,7 +279,8 @@ sealed class SessionForm : Flyout
             if (_sessions is { Count: > 0 } all)
             {
                 var nameW = TextRenderer.MeasureText(g, name, title, Size.Empty, TextFormatFlags.NoPadding).Width;
-                Label(g, $"{all.Count} · {Fmt.Bytes(all.Sum(s => s.Commit))}", small, Theme.Muted,
+                var range = all.Count > _pageRows ? $" · {_scroll + 1}–{Math.Min(all.Count, _scroll + _pageRows)} · scroll" : "";
+                Label(g, $"{all.Count} · {Fmt.Bytes(all.Sum(s => s.Commit))}{range}", small, Theme.Muted,
                     Rectangle.FromLTRB(left + nameW + Px(10), y, barX, y + Px(HeadH)));
             }
             Label(g, "ram", small, Theme.Muted, new Rectangle(memX, y, Px(MemW), Px(HeadH)), right: true);
@@ -269,7 +298,7 @@ sealed class SessionForm : Flyout
         else
         {
             var largest = Math.Max(1, _sessions.Max(s => s.Commit));
-            foreach (var s in _sessions)
+            foreach (var s in _sessions.Skip(_scroll).Take(_pageRows))
             {
                 var row = new Rectangle(0, y, Width, Px(RowH));
                 var stop = OffersStop(s) ? new Rectangle(stopX + Px(6), y + Px(4), Px(StopW - 6), Px(18)) : Rectangle.Empty;

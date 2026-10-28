@@ -20,7 +20,7 @@ sealed class TrayApp : ApplicationContext
     Bitmap? _check;
     IReadOnlyList<ProviderStatus> _data = [];
     DateTimeOffset? _updated;
-    bool _busy;
+    bool _busy, _again;
 
     public TrayApp()
     {
@@ -113,7 +113,8 @@ sealed class TrayApp : ApplicationContext
 
     async Task RefreshAsync()
     {
-        if (_busy) return;
+        // A request during a refresh (a provider turned on, say) refreshes again when that one ends.
+        if (_busy) { _again = true; return; }
         _busy = true;
         try
         {
@@ -128,6 +129,11 @@ sealed class TrayApp : ApplicationContext
         finally
         {
             _busy = false;
+        }
+        if (_again)
+        {
+            _again = false;
+            await RefreshAsync();
         }
     }
 
@@ -266,7 +272,7 @@ static class Settings
         }
     }
 
-    // Quick settings: what the flyout and the tray icon show.
+    // Quick settings: what the flyout shows. Codex, Claude and Memory also apply to the tray icon.
     public static bool ShowCodex { get => Flag("ShowCodex", true); set => SetFlag("ShowCodex", value); }
     public static bool ShowClaude { get => Flag("ShowClaude", true); set => SetFlag("ShowClaude", value); }
     public static bool ShowMemory { get => Flag("ShowMemory", true); set => SetFlag("ShowMemory", value); }

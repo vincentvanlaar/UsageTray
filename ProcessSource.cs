@@ -15,10 +15,11 @@ sealed record ProcRow(int Pid, DateTime? Started, string Name, string Detail, lo
 
 /// <summary>An app: a root process plus its descendants. <see cref="Members"/> has the root first.</summary>
 /// <param name="Link">Opens the app's own view of it (Claude sessions: claude://… in the desktop app).</param>
-/// <param name="Sessions">Claude Code sessions this app started. They have their own rows, but can end with it.</param>
+/// <param name="Sessions">Agent sessions this app started. They have their own rows, but can end with it.</param>
 /// <param name="Agent">"Claude" or "Codex" when the app is an agent session.</param>
+/// <param name="Host">For a Codex server (app-server, exec-server, …), the app that started it.</param>
 sealed record ProcGroup(string Title, string Detail, long Commit, IReadOnlyList<ProcRow> Members, string? Link = null, int Sessions = 0,
-    string? Agent = null, ClaudeSession? Session = null, string? CommandLine = null)
+    string? Agent = null, ClaudeSession? Session = null, string? CommandLine = null, string? Host = null)
 {
     public int RootPid => Members[0].Pid;
     public bool Protected => Members[0].Protected;
@@ -41,7 +42,7 @@ static class ProcessSource
     static readonly HashSet<string> Browsers = new(StringComparer.OrdinalIgnoreCase)
         { "chrome", "msedge", "brave", "vivaldi", "opera" };
 
-    /// <param name="agent">Only the sessions of this agent ("Claude" or "Codex"), all of them.</param>
+    /// <param name="agent">Only the sessions of this agent ("Claude" or "Codex"), without the <paramref name="top"/> cap.</param>
     public static IReadOnlyList<ProcGroup> Read(int top = 40, string? agent = null)
     {
         var procs = Snapshot();
@@ -112,12 +113,13 @@ static class ProcessSource
             .ToList();
 
         var title = root.Name;
-        string? detail, link = null;
+        string? detail, link = null, host = null;
         if (isSession && IsCodex(root))
         {
-            var server = root.CommandLine!.Contains(" app-server");
-            title = server ? L.T("Codex app-server", "Codex app-server") : L.T("Codex session", "Codex-sessie");
-            detail = Fmt.Join("codex", server ? parent?.Name : null);
+            var server = CodexServer(root.CommandLine);
+            title = server is null ? L.T("Codex session", "Codex-sessie") : "Codex " + server;
+            host = server is null ? null : parent?.Name;
+            detail = Fmt.Join("codex", host);
         }
         else if (isSession)
         {
@@ -131,7 +133,7 @@ static class ProcessSource
         else detail = WindowTitle(root.Pid);
 
         return new(title, Fmt.Join(detail, all.Count > 1 ? $"{all.Count} proc" : null) ?? "", all.Sum(p => p.Commit), members, link, launched,
-            isSession ? AgentOf(root) : null, s, root.CommandLine);
+            isSession ? AgentOf(root) : null, s, root.CommandLine, host);
     }
 
     /// <summary>Ends the given processes; skips protected ones and PIDs that were reused since the snapshot.</summary>
@@ -180,9 +182,21 @@ static class ProcessSource
 
     static bool IsCli(Proc p) => IsClaude(p) && !IsDesktop(p);
 
-    // The Codex CLI (a terminal session, or the app-server behind an editor or the Codex app), not the Codex app's own window.
+    // The Codex CLI (a terminal session, or a server behind an editor or an app), not the Codex app itself
+    // (an Electron app, wherever it is installed) and not the app-server this app runs to read the limits.
     static bool IsCodex(Proc p) => p.CommandLine is { } cmd && p.Name.Equals("codex", StringComparison.OrdinalIgnoreCase)
-        && !cmd.Contains("--type=") && (cmd.Contains(" app-server") || !Exe(cmd).Contains(@"\WindowsApps", StringComparison.OrdinalIgnoreCase));
+        && p.ParentPid != Environment.ProcessId && !cmd.Contains("--type=")
+        && (CodexServer(cmd) is not null || !IsElectron(Exe(cmd)));
+
+    /// <summary>The server subcommand ("app-server", "exec-server", …) of a Codex command line; null for a terminal session.</summary>
+    public static string? CodexServer(string? cmd) =>
+        cmd is null ? null : Regex.Match(cmd, @"\s([a-z]+-server)(?=\s|$)") is { Success: true } m ? m.Groups[1].Value : null;
+
+    static bool IsElectron(string exe)
+    {
+        try { return File.Exists(Path.Combine(Path.GetDirectoryName(exe) ?? "", "resources", "app.asar")); }
+        catch (Exception) { return false; }
+    }
 
     static string AgentOf(Proc p) => IsCodex(p) ? "Codex" : "Claude";
 

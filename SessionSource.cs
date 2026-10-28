@@ -33,7 +33,10 @@ static class SessionSource
         var load = gpu ? Meters.Gpu() : null;
         double? Gpu(ProcGroup g) => load is null ? null : Math.Min(100, g.Members.Sum(m => load.ByPid.GetValueOrDefault(m.Pid)));
 
-        var holders = agent == "Codex" && groups.Count > 0 ? RolloutHolders() : [];
+        // A rollout a session holds open was written after that session started (or resumed it and took a turn).
+        var holders = agent == "Codex" && groups.Count > 0
+            ? RolloutHolders(groups.Min(g => g.Members[0].Started)?.AddMinutes(-1) ?? DateTime.Now.AddDays(-7))
+            : [];
         return groups
             .Select(g => (agent == "Codex" ? Codex(g, holders) : Claude(g)) with { Cpu = cpu.GetValueOrDefault(g.RootPid), Gpu = Gpu(g) })
             .OrderBy(s => s.State)
@@ -66,8 +69,7 @@ static class SessionSource
         var pids = g.Members.Select(m => m.Pid).ToHashSet();
         var threads = holders.Where(h => h.Value.Overlaps(pids)).Select(h => Rollout.Read(h.Key)).OfType<Rollout>()
             .OrderBy(t => t.Subagent).ThenByDescending(t => t.At).ToList();
-        var server = g.CommandLine?.Contains(" app-server") == true;
-        var host = Regex.Match(g.Detail, @"^codex · (\w+)").Groups[1].Value;
+        var server = ProcessSource.CodexServer(g.CommandLine) is not null;
 
         var (state, text, since) = threads.Count == 0
             ? (SessionState.Unknown, L.T("running", "actief"), (DateTimeOffset?)null)
@@ -76,9 +78,8 @@ static class SessionSource
                 : (SessionState.Idle, L.T("idle", "stil") + " " + Fmt.Span(DateTimeOffset.Now - threads.Max(t => t.At)!.Value), threads.Max(t => t.At));
         var main = threads.FirstOrDefault();
         var title = main?.Name ?? g.Title;
-        var detail = Fmt.Join(Project(main?.Cwd), threads.Count > 1 ? L.T($"{threads.Count} threads", $"{threads.Count} threads") : null,
-            host.Length > 0 ? host : null);
-        // An app-server serves an editor or the Codex app; ending it would break that app.
+        var detail = Fmt.Join(Project(main?.Cwd), threads.Count > 1 ? L.T($"{threads.Count} threads", $"{threads.Count} threads") : null, g.Host);
+        // A server works for an editor or an app; ending it would break that app.
         return new(title, detail, state, text, since, g.Commit, null, null, g, !g.Protected && !server);
     }
 
@@ -116,11 +117,12 @@ static class SessionSource
 
     static readonly string CodexHome = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex");
 
-    /// <summary>Rollouts written in the last week, and the processes that hold each open.</summary>
-    static Dictionary<string, HashSet<int>> RolloutHolders()
+    /// <summary>Rollouts written since <paramref name="since"/> (at most a week back), and the processes that hold each open.</summary>
+    /// <remarks>One Restart Manager query per file, so only files that a running session can hold.</remarks>
+    static Dictionary<string, HashSet<int>> RolloutHolders(DateTime since)
     {
         var result = new Dictionary<string, HashSet<int>>();
-        var since = DateTime.Now.AddDays(-7);
+        if (since < DateTime.Now.AddDays(-7)) since = DateTime.Now.AddDays(-7);
         for (var day = DateTime.Today; day >= DateTime.Today.AddDays(-30); day = day.AddDays(-1))
         {
             var dir = Path.Combine(CodexHome, "sessions", $"{day:yyyy}", $"{day:MM}", $"{day:dd}");
@@ -178,10 +180,12 @@ static class SessionSource
                 var meta = JsonNode.Parse(reader.ReadLine() ?? "")?["payload"];
                 var id = meta?["id"]?.ToString();
 
-                // The turn events are near the end; a turn writes far less than this between them.
-                stream.Seek(Math.Max(0, stream.Length - 256 * 1024), SeekOrigin.Begin);
+                // The turn events are near the end. A turn ends with a small task_complete at the very end,
+                // so a long tail without any turn event belongs to a turn whose output pushed task_started out.
+                const int Tail = 256 * 1024;
+                stream.Seek(Math.Max(0, stream.Length - Tail), SeekOrigin.Begin);
                 reader.DiscardBufferedData();
-                bool busy = false;
+                var busy = stream.Length > Tail;
                 DateTimeOffset? at = null;
                 for (var line = reader.ReadLine(); line is not null; line = reader.ReadLine())
                 {
@@ -205,7 +209,10 @@ static class SessionSource
             try
             {
                 string? name = null;
-                foreach (var line in File.ReadLines(Path.Combine(CodexHome, "session_index.jsonl")))
+                // Codex may have it open for appending.
+                using var reader = new StreamReader(new FileStream(Path.Combine(CodexHome, "session_index.jsonl"),
+                    FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete), Encoding.UTF8);
+                for (var line = reader.ReadLine(); line is not null; line = reader.ReadLine())
                     if (line.Contains(id) && JsonNode.Parse(line) is JsonObject entry && entry["id"]?.ToString() == id)
                         name = entry["thread_name"]?.ToString() is { Length: > 0 } n ? n : name;
                 return name;

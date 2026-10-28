@@ -23,7 +23,7 @@ static class SystemSource
             rows.Add(Row("commit", m.TotalPageFile - m.AvailPageFile, m.TotalPageFile));
         }
         if (Settings.ShowCpu) rows.Add(Load("cpu", Meters.Cpu()));
-        if (Settings.ShowGpu) rows.Add(Load("gpu", Meters.Gpu()?.Total));
+        if (Settings.ShowGpu) rows.Add(Load("gpu", Meters.Gpu()?.Total, Meters.HasGpu));
         return rows.Count == 0 ? null : new(Name, rows, Note: L.T("click for processes", "klik voor processen"));
     }
 
@@ -39,8 +39,9 @@ static class SystemSource
         return GlobalMemoryStatusEx(ref m) ? Row("ram", m.TotalPhys - m.AvailPhys, m.TotalPhys) : null;
     }
 
-    // Until a second reading there is no rate yet: an empty bar with "…".
-    static UsageWindow Load(string label, double? pct) => new(label, pct ?? 0, TimeSpan.Zero, null, pct is null ? "…" : "");
+    // Until a second reading there is no rate yet: an empty bar with "…". Without the counters: "n/a".
+    static UsageWindow Load(string label, double? pct, bool available = true) =>
+        new(label, pct ?? 0, TimeSpan.Zero, null, pct is not null ? "" : available ? "…" : "n/a");
 
     static UsageWindow Row(string label, ulong used, ulong total)
     {

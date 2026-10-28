@@ -204,8 +204,8 @@ sealed class ProcessForm : Flyout
                 $"{what} beëindigen?\n\n{rows.Count} proces(sen), {size}. Niet-opgeslagen werk gaat verloren.");
             if (sessions > 0)
                 ask += "\n" + L.T(
-                    $"{sessions} Claude Code session(s) started from it can end too.",
-                    $"{sessions} Claude Code-sessie(s) die het startte kunnen ook stoppen.");
+                    $"{sessions} Claude Code or Codex session(s) started from it can end too.",
+                    $"{sessions} Claude Code- of Codex-sessie(s) die het startte kunnen ook stoppen.");
             if (MessageBox.Show(this, ask, "UsageTray", MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
                 return;
             if (ProcessSource.End(rows) is var failed and > 0)

@@ -24,6 +24,9 @@ static class Meters
     static readonly object GpuLock = new();
     static nint _query, _counter;
     static bool _noGpu;
+
+    /// <summary>False once the GPU counters turned out to be missing: no GPU reading will come.</summary>
+    public static bool HasGpu => !_noGpu;
     static DateTime _gpuAt;
     static GpuLoad? _gpu;
 
